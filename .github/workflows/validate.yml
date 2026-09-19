@@ -1,0 +1,68 @@
+name: PowerCLI Script Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Validate PowerShell Scripts
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Get-ChildItem -Recurse -Filter "*.ps1" | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error
+          }
+          if ($results) {
+            $results | Format-Table -AutoSize
+            Write-Host "PSScriptAnalyzer found $($results.Count) issues"
+            exit 1
+          }
+          Write-Host "All scripts passed PSScriptAnalyzer checks!"
+
+      - name: Check Comment-Based Help
+        shell: pwsh
+        run: |
+          $scripts = Get-ChildItem -Recurse -Filter "*.ps1"
+          $missing = @()
+          foreach ($script in $scripts) {
+            $content = Get-Content $script.FullName -Raw
+            if ($content -notmatch '\.SYNOPSIS') {
+              $missing += $script.Name
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Warning "Scripts missing .SYNOPSIS help: $($missing -join ', ')"
+          } else {
+            Write-Host "All scripts have comment-based help!"
+          }
+
+      - name: Validate Script Syntax
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem -Recurse -Filter "*.ps1" | ForEach-Object {
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$parseErrors
+            )
+            if ($parseErrors.Count -gt 0) {
+              $errors += "$($_.Name): $($parseErrors | Select-Object -ExpandProperty Message)"
+            }
+          }
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+          Write-Host "All scripts have valid syntax!"
